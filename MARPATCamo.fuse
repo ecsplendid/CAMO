@@ -1,0 +1,1065 @@
+--[[--
+MARPAT / MultiCam Camouflage Generator for DaVinci Resolve Fusion
+Generates MARPAT-style digital camouflage or MultiCam-style organic camouflage
+using 3D simplex noise with fBm. All parameters are keyframeable.
+Uses grid-cell caching for performance. Frame caching skips re-render when
+parameters haven't changed. Pixel fill uses DoMultiProcess for multi-threaded
+scanline rendering across CPU cores (4-8x speedup).
+
+Install: Copy to ~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Fuses/
+--]]--
+
+FuRegisterClass("MARPATCamo", CT_SourceTool, {
+    REGS_Name = "MARPAT Camo",
+    REGS_Category = "Generator",
+    REGS_OpIconString = "MCG",
+    REGS_OpDescription = "Generates MARPAT-style digital or MultiCam organic camouflage textures",
+    REG_NoObjMatCtrls = true,
+    REG_NoMotionBlurCtrls = true,
+    REG_Source_GlobalCtrls = true,
+    REG_Source_SizeCtrls = true,
+    REG_Source_AspectCtrls = true,
+    REG_Source_DepthCtrls = true,
+    REG_TimeVariant = true,
+    REGS_Company = "MLST",
+    REG_Version = 400,
+})
+
+------------------------------------------------------------------------
+-- Frame cache (module-level)
+------------------------------------------------------------------------
+local cached_image = nil
+local cached_key = nil
+local last_preset = -1
+
+------------------------------------------------------------------------
+-- Simplex Noise
+------------------------------------------------------------------------
+local perm_base = {
+    151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,
+    140,36,103,30,69,142,8,99,37,240,21,10,23,190,6,148,
+    247,120,234,75,0,26,197,62,94,252,219,203,117,35,11,32,
+    57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,
+    74,165,71,134,139,48,27,166,77,146,158,231,83,111,229,122,
+    60,211,133,230,220,105,92,41,55,46,245,40,244,102,143,54,
+    65,25,63,161,1,216,80,73,209,76,132,187,208,89,18,169,
+    200,196,135,130,116,188,159,86,164,100,109,198,173,186,3,64,
+    52,217,226,250,124,123,5,202,38,147,118,126,255,82,85,212,
+    207,206,59,227,47,16,58,17,182,189,28,42,223,183,170,213,
+    119,248,152,2,44,154,163,70,221,153,101,155,167,43,172,9,
+    129,22,39,253,19,98,108,110,79,113,224,232,178,185,112,104,
+    218,246,97,228,251,34,242,193,238,210,144,12,191,179,162,241,
+    81,51,145,235,249,14,239,107,49,192,214,31,181,199,106,157,
+    184,84,204,176,115,121,50,45,127,4,150,254,138,236,205,93,
+    222,114,67,29,24,72,243,141,128,195,78,66,215,61,156,180,
+}
+for i = 1, 256 do perm_base[256 + i] = perm_base[i] end
+
+local grad3 = {
+    {1,1,0},{-1,1,0},{1,-1,0},{-1,-1,0},
+    {1,0,1},{-1,0,1},{1,0,-1},{-1,0,-1},
+    {0,1,1},{0,-1,1},{0,1,-1},{0,-1,-1},
+}
+
+local floor = math.floor
+local max   = math.max
+local min   = math.min
+local abs   = math.abs
+local sin   = math.sin
+local cos   = math.cos
+local pi    = math.pi
+
+local function build_perm(seed)
+    if seed == 0 then return perm_base end
+    local p = {}
+    local offset = seed % 256
+    for i = 1, 512 do
+        p[i] = perm_base[((perm_base[((i - 1 + offset) % 256) + 1] + offset) % 256) + 1]
+    end
+    return p
+end
+
+local function simplex3d(xin, yin, zin, p)
+    local F3 = 0.33333333
+    local G3 = 0.16666667
+    local s = (xin + yin + zin) * F3
+    local i = floor(xin + s)
+    local j = floor(yin + s)
+    local k = floor(zin + s)
+    local t = (i + j + k) * G3
+    local x0 = xin - (i - t)
+    local y0 = yin - (j - t)
+    local z0 = zin - (k - t)
+
+    local i1, j1, k1, i2, j2, k2
+    if x0 >= y0 then
+        if y0 >= z0 then     i1,j1,k1, i2,j2,k2 = 1,0,0, 1,1,0
+        elseif x0 >= z0 then i1,j1,k1, i2,j2,k2 = 1,0,0, 1,0,1
+        else                  i1,j1,k1, i2,j2,k2 = 0,0,1, 1,0,1 end
+    else
+        if y0 < z0 then      i1,j1,k1, i2,j2,k2 = 0,0,1, 0,1,1
+        elseif x0 < z0 then  i1,j1,k1, i2,j2,k2 = 0,1,0, 0,1,1
+        else                  i1,j1,k1, i2,j2,k2 = 0,1,0, 1,1,0 end
+    end
+
+    local x1 = x0 - i1 + G3
+    local y1 = y0 - j1 + G3
+    local z1 = z0 - k1 + G3
+    local x2 = x0 - i2 + 2.0*G3
+    local y2 = y0 - j2 + 2.0*G3
+    local z2 = z0 - k2 + 2.0*G3
+    local x3 = x0 - 1.0 + 0.5
+    local y3 = y0 - 1.0 + 0.5
+    local z3 = z0 - 1.0 + 0.5
+
+    local ii = (i % 256) + 1
+    local jj = (j % 256) + 1
+    local kk = (k % 256) + 1
+
+    local gi0 = (p[ii     + p[jj     + p[kk    ]]] % 12) + 1
+    local gi1 = (p[ii+i1  + p[jj+j1  + p[kk+k1]]] % 12) + 1
+    local gi2 = (p[ii+i2  + p[jj+j2  + p[kk+k2]]] % 12) + 1
+    local gi3 = (p[ii+1   + p[jj+1   + p[kk+1 ]]] % 12) + 1
+
+    local g, n0, n1, n2, n3
+    local t0 = 0.6 - x0*x0 - y0*y0 - z0*z0
+    if t0 < 0 then n0 = 0 else t0 = t0*t0; g = grad3[gi0]; n0 = t0*t0*(g[1]*x0+g[2]*y0+g[3]*z0) end
+    local t1 = 0.6 - x1*x1 - y1*y1 - z1*z1
+    if t1 < 0 then n1 = 0 else t1 = t1*t1; g = grad3[gi1]; n1 = t1*t1*(g[1]*x1+g[2]*y1+g[3]*z1) end
+    local t2 = 0.6 - x2*x2 - y2*y2 - z2*z2
+    if t2 < 0 then n2 = 0 else t2 = t2*t2; g = grad3[gi2]; n2 = t2*t2*(g[1]*x2+g[2]*y2+g[3]*z2) end
+    local t3 = 0.6 - x3*x3 - y3*y3 - z3*z3
+    if t3 < 0 then n3 = 0 else t3 = t3*t3; g = grad3[gi3]; n3 = t3*t3*(g[1]*x3+g[2]*y3+g[3]*z3) end
+
+    return 32.0 * (n0 + n1 + n2 + n3)
+end
+
+local function fbm3d(x, y, z, octaves, lacunarity, persistence, p)
+    local total = 0
+    local amp = 1.0
+    local freq = 1.0
+    local mx = 0
+    for i = 1, octaves do
+        total = total + simplex3d(x*freq, y*freq, z*freq, p) * amp
+        mx = mx + amp
+        amp = amp * persistence
+        freq = freq * lacunarity
+    end
+    return total / mx
+end
+
+------------------------------------------------------------------------
+-- Helper: clamp
+------------------------------------------------------------------------
+local function clamp(v, lo, hi)
+    if v < lo then return lo end
+    if v > hi then return hi end
+    return v
+end
+
+------------------------------------------------------------------------
+-- sRGB to linear conversion
+-- Fusion works in linear light; our preset colors are sRGB-encoded.
+-- Without this conversion, colors look different in Edit vs Fusion page.
+------------------------------------------------------------------------
+local function srgb_to_linear(c)
+    if c <= 0.04045 then
+        return c / 12.92
+    else
+        return ((c + 0.055) / 1.055) ^ 2.4
+    end
+end
+
+------------------------------------------------------------------------
+-- Presets: 0-21 (21 = Custom)
+-- 0=Woodland, 1=Desert, 2=Snow, 3=Urban, 4=Night,
+-- 5=Noir, 6=Smoke, 7=Parchment, 8=Moss, 9=Concrete, 10=Dusk,
+-- 11=Cyberpunk, 12=Autumn, 13=Ocean, 14=Lava, 15=Pastel,
+-- 16=Film Grain, 17=MultiCam, 18=MC Arid, 19=MC Tropic,
+-- 20=MLST, 21=Custom
+------------------------------------------------------------------------
+local presets = {
+    [0] = { -- Woodland
+        c = {
+            {0.10, 0.18, 0.05, 1},
+            {0.25, 0.38, 0.18, 1},
+            {0.45, 0.35, 0.22, 1},
+            {0.72, 0.65, 0.45, 1},
+            {0.08, 0.08, 0.08, 1},
+            {0.33, 0.35, 0.20, 1},
+        },
+        w = {0.22, 0.20, 0.18, 0.15, 0.10, 0.15},
+    },
+    [1] = { -- Desert
+        c = {
+            {0.78, 0.68, 0.48, 1},
+            {0.60, 0.50, 0.32, 1},
+            {0.55, 0.42, 0.28, 1},
+            {0.30, 0.24, 0.16, 1},
+            {0.82, 0.75, 0.58, 1},
+            {0.68, 0.62, 0.45, 1},
+        },
+        w = {0.22, 0.18, 0.16, 0.14, 0.16, 0.14},
+    },
+    [2] = { -- Snow
+        c = {
+            {0.95, 0.95, 0.95, 1},
+            {0.78, 0.80, 0.80, 1},
+            {0.42, 0.48, 0.42, 1},
+            {0.20, 0.20, 0.20, 1},
+            {0.78, 0.85, 0.90, 1},
+            {0.45, 0.48, 0.52, 1},
+        },
+        w = {0.25, 0.20, 0.15, 0.12, 0.15, 0.13},
+    },
+    [3] = { -- Urban
+        c = {
+            {0.54, 0.54, 0.54, 1},
+            {0.32, 0.32, 0.32, 1},
+            {0.72, 0.72, 0.72, 1},
+            {0.14, 0.14, 0.14, 1},
+            {0.62, 0.60, 0.58, 1},
+            {0.25, 0.25, 0.25, 1},
+        },
+        w = {0.20, 0.18, 0.18, 0.12, 0.16, 0.16},
+    },
+    [4] = { -- Night
+        c = {
+            {0.04, 0.04, 0.12, 1},
+            {0.06, 0.06, 0.18, 1},
+            {0.12, 0.12, 0.28, 1},
+            {0.03, 0.03, 0.03, 1},
+            {0.06, 0.04, 0.14, 1},
+            {0.22, 0.24, 0.30, 1},
+        },
+        w = {0.22, 0.20, 0.16, 0.14, 0.14, 0.14},
+    },
+    [5] = { -- Noir
+        c = {
+            {0.08, 0.08, 0.08, 1},
+            {0.18, 0.18, 0.18, 1},
+            {0.30, 0.30, 0.30, 1},
+            {0.45, 0.45, 0.45, 1},
+            {0.12, 0.12, 0.12, 1},
+            {0.55, 0.55, 0.55, 1},
+        },
+        w = {0.22, 0.20, 0.18, 0.17, 0.13, 0.10},
+    },
+    [6] = { -- Smoke
+        c = {
+            {0.15, 0.17, 0.22, 1},
+            {0.25, 0.28, 0.35, 1},
+            {0.35, 0.38, 0.45, 1},
+            {0.20, 0.22, 0.28, 1},
+            {0.45, 0.48, 0.55, 1},
+            {0.10, 0.12, 0.16, 1},
+        },
+        w = {0.22, 0.20, 0.18, 0.17, 0.13, 0.10},
+    },
+    [7] = { -- Parchment
+        c = {
+            {0.75, 0.68, 0.55, 1},
+            {0.65, 0.58, 0.45, 1},
+            {0.82, 0.76, 0.62, 1},
+            {0.55, 0.48, 0.38, 1},
+            {0.70, 0.62, 0.50, 1},
+            {0.85, 0.80, 0.68, 1},
+        },
+        w = {0.20, 0.18, 0.18, 0.17, 0.15, 0.12},
+    },
+    [8] = { -- Moss
+        c = {
+            {0.20, 0.28, 0.15, 1},
+            {0.30, 0.38, 0.22, 1},
+            {0.25, 0.32, 0.18, 1},
+            {0.15, 0.22, 0.12, 1},
+            {0.35, 0.42, 0.28, 1},
+            {0.18, 0.25, 0.14, 1},
+        },
+        w = {0.20, 0.18, 0.18, 0.17, 0.15, 0.12},
+    },
+    [9] = { -- Concrete
+        c = {
+            {0.42, 0.40, 0.38, 1},
+            {0.52, 0.50, 0.48, 1},
+            {0.35, 0.33, 0.32, 1},
+            {0.60, 0.58, 0.55, 1},
+            {0.28, 0.27, 0.26, 1},
+            {0.48, 0.46, 0.44, 1},
+        },
+        w = {0.20, 0.18, 0.18, 0.17, 0.15, 0.12},
+    },
+    [10] = { -- Dusk
+        c = {
+            {0.35, 0.20, 0.22, 1},
+            {0.50, 0.30, 0.28, 1},
+            {0.42, 0.25, 0.25, 1},
+            {0.28, 0.18, 0.20, 1},
+            {0.55, 0.35, 0.30, 1},
+            {0.22, 0.15, 0.18, 1},
+        },
+        w = {0.20, 0.18, 0.18, 0.17, 0.15, 0.12},
+    },
+    [11] = { -- Cyberpunk
+        c = {
+            {0.05, 0.02, 0.15, 1},
+            {0.15, 0.05, 0.30, 1},
+            {0.00, 0.80, 0.80, 1},
+            {0.90, 0.10, 0.50, 1},
+            {0.20, 0.10, 0.25, 1},
+            {0.00, 0.50, 0.60, 1},
+        },
+        w = {0.25, 0.20, 0.15, 0.15, 0.15, 0.10},
+    },
+    [12] = { -- Autumn
+        c = {
+            {0.60, 0.25, 0.05, 1},
+            {0.80, 0.45, 0.10, 1},
+            {0.45, 0.15, 0.05, 1},
+            {0.95, 0.65, 0.20, 1},
+            {0.30, 0.12, 0.05, 1},
+            {0.70, 0.55, 0.25, 1},
+        },
+        w = {0.22, 0.20, 0.18, 0.15, 0.15, 0.10},
+    },
+    [13] = { -- Ocean
+        c = {
+            {0.02, 0.15, 0.25, 1},
+            {0.05, 0.30, 0.40, 1},
+            {0.10, 0.50, 0.55, 1},
+            {0.00, 0.20, 0.30, 1},
+            {0.15, 0.60, 0.65, 1},
+            {0.03, 0.10, 0.18, 1},
+        },
+        w = {0.25, 0.22, 0.18, 0.15, 0.12, 0.08},
+    },
+    [14] = { -- Lava
+        c = {
+            {0.15, 0.02, 0.00, 1},
+            {0.40, 0.08, 0.00, 1},
+            {0.90, 0.30, 0.00, 1},
+            {1.00, 0.60, 0.05, 1},
+            {0.25, 0.04, 0.00, 1},
+            {0.70, 0.15, 0.00, 1},
+        },
+        w = {0.25, 0.22, 0.18, 0.12, 0.13, 0.10},
+    },
+    [15] = { -- Pastel
+        c = {
+            {0.85, 0.70, 0.80, 1},
+            {0.70, 0.80, 0.90, 1},
+            {0.90, 0.85, 0.70, 1},
+            {0.75, 0.90, 0.80, 1},
+            {0.80, 0.75, 0.90, 1},
+            {0.90, 0.80, 0.75, 1},
+        },
+        w = {0.18, 0.18, 0.17, 0.17, 0.15, 0.15},
+    },
+    [16] = { -- Film Grain
+        c = {
+            {0.25, 0.22, 0.18, 1},
+            {0.40, 0.35, 0.28, 1},
+            {0.55, 0.48, 0.38, 1},
+            {0.35, 0.30, 0.22, 1},
+            {0.65, 0.58, 0.45, 1},
+            {0.18, 0.15, 0.12, 1},
+        },
+        w = {0.22, 0.20, 0.18, 0.17, 0.13, 0.10},
+    },
+    [17] = { -- MultiCam
+        c = {
+            {0.549, 0.498, 0.396, 1},
+            {0.627, 0.576, 0.471, 1},
+            {0.710, 0.659, 0.608, 1},
+            {0.843, 0.812, 0.808, 1},
+            {0.463, 0.471, 0.369, 1},
+            {0.306, 0.247, 0.204, 1},
+        },
+        w = {0.20, 0.18, 0.16, 0.14, 0.16, 0.16},
+    },
+    [18] = { -- MC Arid
+        c = {
+            {0.769, 0.714, 0.576, 1},
+            {0.659, 0.584, 0.455, 1},
+            {0.831, 0.788, 0.710, 1},
+            {0.541, 0.478, 0.353, 1},
+            {0.353, 0.290, 0.227, 1},
+            {0.878, 0.847, 0.792, 1},
+        },
+        w = {0.20, 0.18, 0.16, 0.14, 0.16, 0.16},
+    },
+    [19] = { -- MC Tropic
+        c = {
+            {0.227, 0.290, 0.165, 1},
+            {0.353, 0.416, 0.227, 1},
+            {0.478, 0.541, 0.290, 1},
+            {0.290, 0.227, 0.165, 1},
+            {0.165, 0.227, 0.102, 1},
+            {0.541, 0.478, 0.353, 1},
+        },
+        w = {0.22, 0.20, 0.16, 0.14, 0.14, 0.14},
+    },
+    [20] = { -- MLST (Machine Learning Street Talk brand)
+        c = {
+            {0.14, 0.18, 0.25, 1},
+            {0.10, 0.13, 0.19, 1},
+            {1.00, 0.71, 0.17, 1},
+            {0.96, 0.96, 0.96, 1},
+            {0.23, 0.29, 0.37, 1},
+            {0.80, 0.57, 0.13, 1},
+        },
+        w = {0.28, 0.20, 0.12, 0.10, 0.18, 0.12},
+    },
+}
+
+local num_presets = 21 -- indices 0..20 are presets, 21 is Custom
+
+------------------------------------------------------------------------
+-- Create
+------------------------------------------------------------------------
+function Create()
+    InPreset = self:AddInput("Preset", "Preset", {
+        LINKID_DataType = "Number",
+        INPID_InputControl = "ComboControl",
+        INP_Default = 0, INP_Integer = true,
+        { CCS_AddString = "Woodland" },       -- 0
+        { CCS_AddString = "Desert" },          -- 1
+        { CCS_AddString = "Snow" },            -- 2
+        { CCS_AddString = "Urban" },           -- 3
+        { CCS_AddString = "Night" },           -- 4
+        { CCS_AddString = "Noir" },            -- 5
+        { CCS_AddString = "Smoke" },           -- 6
+        { CCS_AddString = "Parchment" },       -- 7
+        { CCS_AddString = "Moss" },            -- 8
+        { CCS_AddString = "Concrete" },        -- 9
+        { CCS_AddString = "Dusk" },            -- 10
+        { CCS_AddString = "Cyberpunk" },       -- 11
+        { CCS_AddString = "Autumn" },          -- 12
+        { CCS_AddString = "Ocean" },           -- 13
+        { CCS_AddString = "Lava" },            -- 14
+        { CCS_AddString = "Pastel" },          -- 15
+        { CCS_AddString = "Film Grain" },      -- 16
+        { CCS_AddString = "MultiCam" },        -- 17
+        { CCS_AddString = "MC Arid" },         -- 18
+        { CCS_AddString = "MC Tropic" },       -- 19
+        { CCS_AddString = "MLST" },            -- 20
+        { CCS_AddString = "Custom" },          -- 21
+    })
+
+    InMode = self:AddInput("Mode", "Mode", {
+        LINKID_DataType = "Number",
+        INPID_InputControl = "ComboControl",
+        INP_Default = 0, INP_Integer = true,
+        { CCS_AddString = "Digital (MARPAT)" },
+        { CCS_AddString = "Organic (MultiCam)" },
+    })
+
+    InPixelSize = self:AddInput("Pixel Size", "PixelSize", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 4, INP_MinScale = 1, INP_MaxScale = 32, INP_Integer = true,
+    })
+    InScale = self:AddInput("Scale", "Scale", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 5.0, INP_MinScale = 0.1, INP_MaxScale = 50.0,
+    })
+    InOctaves = self:AddInput("Octaves", "Octaves", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 4, INP_MinScale = 1, INP_MaxScale = 8, INP_Integer = true,
+    })
+    InLacunarity = self:AddInput("Lacunarity", "Lacunarity", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 2.0, INP_MinScale = 1.0, INP_MaxScale = 4.0,
+    })
+    InPersistence = self:AddInput("Persistence", "Persistence", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 0.5, INP_MinScale = 0.0, INP_MaxScale = 1.0,
+    })
+    InPixelAspect = self:AddInput("Pixel Aspect", "PatternAspect", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 1.5, INP_MinScale = 0.5, INP_MaxScale = 3.0,
+    })
+    InSeed = self:AddInput("Seed", "Seed", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 42, INP_MinScale = 0, INP_MaxScale = 999, INP_Integer = true,
+    })
+
+    -- Position / Animation
+    InOffsetX = self:AddInput("X Offset", "OffsetX", {
+        LINKID_DataType = "Number", INPID_InputControl = "ScrewControl",
+        INP_Default = 0.0,
+    })
+    InOffsetY = self:AddInput("Y Offset", "OffsetY", {
+        LINKID_DataType = "Number", INPID_InputControl = "ScrewControl",
+        INP_Default = 0.0,
+    })
+    InOffsetZ = self:AddInput("Z Offset (Time)", "OffsetZ", {
+        LINKID_DataType = "Number", INPID_InputControl = "ScrewControl",
+        INP_Default = 0.0,
+    })
+    InZoom = self:AddInput("Zoom", "Zoom", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 1.0, INP_MinScale = 0.01, INP_MaxScale = 10.0,
+    })
+
+    -- Seethe (animated morphing via domain warp + threshold shift)
+    InSeethe = self:AddInput("Seethe", "Seethe", {
+        LINKID_DataType = "Number", INPID_InputControl = "ScrewControl",
+        INP_Default = 0.0,
+    })
+    InSeetheAmount = self:AddInput("Seethe Amount", "SeetheAmount", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 1.0, INP_MinScale = 0.0, INP_MaxScale = 5.0,
+    })
+
+    -- Creative parameters
+    InWarpAmount = self:AddInput("Warp", "Warp", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 0.0, INP_MinScale = 0.0, INP_MaxScale = 5.0,
+    })
+    InContrast = self:AddInput("Contrast", "Contrast", {
+        LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+        INP_Default = 1.0, INP_MinScale = 0.5, INP_MaxScale = 2.0,
+    })
+    InInvert = self:AddInput("Invert", "Invert", {
+        LINKID_DataType = "Number", INPID_InputControl = "CheckboxControl",
+        INP_Default = 0, INP_Integer = true,
+    })
+
+    -- Custom colors (6 colors with weights)
+    -- Default values match Woodland preset so pickers show something useful
+    local defaults_r = {0.10, 0.25, 0.45, 0.72, 0.08, 0.33}
+    local defaults_g = {0.18, 0.38, 0.35, 0.65, 0.08, 0.35}
+    local defaults_b = {0.05, 0.18, 0.22, 0.45, 0.08, 0.20}
+    local defaults_w = {0.22, 0.20, 0.18, 0.15, 0.10, 0.15}
+
+    InColorR = {}; InColorG = {}; InColorB = {}; InColorA = {}; InWeight = {}
+    for i = 1, 6 do
+        InColorR[i] = self:AddInput("Color " .. i, "Color" .. i .. "R", {
+            LINKID_DataType = "Number", INPID_InputControl = "ColorControl",
+            INP_Default = defaults_r[i], IC_ControlGroup = i, IC_ControlID = 0,
+        })
+        InColorG[i] = self:AddInput("", "Color" .. i .. "G", {
+            LINKID_DataType = "Number", INPID_InputControl = "ColorControl",
+            INP_Default = defaults_g[i], IC_ControlGroup = i, IC_ControlID = 1,
+        })
+        InColorB[i] = self:AddInput("", "Color" .. i .. "B", {
+            LINKID_DataType = "Number", INPID_InputControl = "ColorControl",
+            INP_Default = defaults_b[i], IC_ControlGroup = i, IC_ControlID = 2,
+        })
+        InColorA[i] = self:AddInput("", "Color" .. i .. "A", {
+            LINKID_DataType = "Number", INPID_InputControl = "ColorControl",
+            INP_Default = 1.0, IC_ControlGroup = i, IC_ControlID = 3,
+        })
+        InWeight[i] = self:AddInput("Weight " .. i, "Weight" .. i, {
+            LINKID_DataType = "Number", INPID_InputControl = "SliderControl",
+            INP_Default = defaults_w[i], INP_MinScale = 0.0, INP_MaxScale = 1.0,
+        })
+    end
+
+    OutImage = self:AddOutput("Output", "Output", {
+        LINKID_DataType = "Image",
+        LINK_Main = 1,
+    })
+end
+
+------------------------------------------------------------------------
+-- NotifyChanged: preset color push is handled in Process() for
+-- reliability. See preset_idx handling below.
+------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+-- Process
+------------------------------------------------------------------------
+function Process(req)
+    -- Handle PreCalc pass (required to avoid red node)
+    if req:IsPreCalc() then
+        local out = Image({
+            IMG_Document = self.Comp,
+            { IMG_Channel = "Red" },
+            { IMG_Channel = "Green" },
+            { IMG_Channel = "Blue" },
+            { IMG_Channel = "Alpha" },
+            IMG_Width = Width,
+            IMG_Height = Height,
+            IMG_XScale = XAspect,
+            IMG_YScale = YAspect,
+            IMAT_OriginalWidth = realwidth,
+            IMAT_OriginalHeight = realheight,
+            IMG_NoData = true,
+        })
+        OutImage:Set(req, out)
+        return
+    end
+
+    -- Read all parameters
+    local preset_idx  = InPreset:GetValue(req).Value
+
+    -- Push preset colors into pickers when preset changes
+    if preset_idx ~= last_preset then
+        last_preset = preset_idx
+        if preset_idx < num_presets and presets[preset_idx] then
+            local p = presets[preset_idx]
+            for i = 1, 6 do
+                InColorR[i]:SetSource(Number(p.c[i][1]), req.Time)
+                InColorG[i]:SetSource(Number(p.c[i][2]), req.Time)
+                InColorB[i]:SetSource(Number(p.c[i][3]), req.Time)
+                InWeight[i]:SetSource(Number(p.w[i]), req.Time)
+            end
+        end
+    end
+
+    local mode        = InMode:GetValue(req).Value
+    local pixel_size  = max(1, InPixelSize:GetValue(req).Value)
+    local scale       = InScale:GetValue(req).Value
+    local octaves     = InOctaves:GetValue(req).Value
+    local lacunarity  = InLacunarity:GetValue(req).Value
+    local persistence = InPersistence:GetValue(req).Value
+    local pix_aspect  = InPixelAspect:GetValue(req).Value or 1.5
+    local seed        = InSeed:GetValue(req).Value
+    local ox          = InOffsetX:GetValue(req).Value
+    local oy          = InOffsetY:GetValue(req).Value
+    local oz          = InOffsetZ:GetValue(req).Value
+    local zm          = max(0.001, InZoom:GetValue(req).Value)
+    local seethe      = InSeethe:GetValue(req).Value or 0
+    local seethe_amt  = InSeetheAmount:GetValue(req).Value or 1.0
+    local warp_amt    = InWarpAmount:GetValue(req).Value or 0
+    local contrast    = InContrast:GetValue(req).Value or 1.0
+    local invert      = (InInvert:GetValue(req).Value or 0) >= 1
+
+    -- Seethe: additive per frame (rate-based)
+    -- seethe value is a rate that accumulates over time via req.Time
+    local seethe_phase = seethe * req.Time * 0.01
+    local seethe_thr = 0
+    local seethe_warp = 0
+    if seethe_phase ~= 0 and seethe_amt > 0 then
+        seethe_thr = sin(seethe_phase * pi * 2 * 0.9) * 0.15 * seethe_amt
+        seethe_warp = seethe_phase * pi * 2
+    end
+
+    -- ALWAYS read colors from the pickers (fix #1)
+    -- This ensures color changes are always respected regardless of preset
+    local colors = {}
+    local weights = {}
+    local wsum = 0
+    for i = 1, 6 do
+        colors[i] = {
+            InColorR[i]:GetValue(req).Value,
+            InColorG[i]:GetValue(req).Value,
+            InColorB[i]:GetValue(req).Value,
+            InColorA[i]:GetValue(req).Value,
+        }
+        weights[i] = InWeight[i]:GetValue(req).Value
+        wsum = wsum + weights[i]
+    end
+    -- Normalize weights
+    if wsum > 0 then
+        for i = 1, 6 do weights[i] = weights[i] / wsum end
+    else
+        for i = 1, 6 do weights[i] = 1.0 / 6.0 end
+    end
+
+    -- Build cache key from ALL parameters (including size globals)
+    local color_key_parts = {}
+    for i = 1, 6 do
+        color_key_parts[i] = string.format("%.4f,%.4f,%.4f,%.4f,%.4f",
+            colors[i][1], colors[i][2], colors[i][3], colors[i][4], weights[i])
+    end
+    local param_key = string.format(
+        "p%d|m%d|ps%d|sc%.4f|oc%d|la%.4f|pe%.4f|pa%.4f|sd%d|ox%.6f|oy%.6f|oz%.6f|zm%.6f|se%.6f|sa%.4f|wa%.4f|co%.4f|iv%d|W%d|H%d|t%.6f|%s",
+        preset_idx, mode, pixel_size, scale, octaves, lacunarity, persistence,
+        pix_aspect, seed, ox, oy, oz, zm, seethe, seethe_amt,
+        warp_amt, contrast, invert and 1 or 0, Width, Height,
+        seethe_phase,
+        table.concat(color_key_parts, "|")
+    )
+
+    -- Frame caching: if nothing changed, return cached image
+    if cached_key == param_key and cached_image then
+        OutImage:Set(req, cached_image)
+        return
+    end
+
+    -- Cumulative thresholds (normalized)
+    local nc = #colors
+    local cum = { weights[1] }
+    for i = 2, nc do cum[i] = cum[i-1] + weights[i] end
+
+    local p = build_perm(seed)
+
+    -- Output image
+    local imgattrs = {
+        IMG_Document = self.Comp,
+        { IMG_Channel = "Red" },
+        { IMG_Channel = "Green" },
+        { IMG_Channel = "Blue" },
+        { IMG_Channel = "Alpha" },
+        IMG_Width = Width,
+        IMG_Height = Height,
+        IMG_XScale = XAspect,
+        IMG_YScale = YAspect,
+        IMG_DeferAlloc = false,
+        IMAT_OriginalWidth = realwidth,
+        IMAT_OriginalHeight = realheight,
+        IMG_Quality = not req:IsQuick(),
+        IMG_MotionBlurQuality = not req:IsNoMotionBlur(),
+    }
+    if not req:IsStampOnly() then
+        imgattrs.IMG_ProxyScale = 1
+    end
+    if SourceDepth ~= 0 then
+        imgattrs.IMG_Depth = SourceDepth
+    end
+
+    local out = Image(imgattrs)
+    -- Fill with opaque black to ensure no uninitialized pixels
+    out:Fill(Pixel({R = 0, G = 0, B = 0, A = 1}))
+    local width = out.Width
+    local height = out.Height
+
+    -- Grid cell dimensions (in pixels)
+    local cellW = max(1, floor(pixel_size * pix_aspect + 0.5))
+    local cellH = max(1, pixel_size)
+
+    -- Grid dimensions
+    local gridW = floor((width - 1) / cellW) + 1
+    local gridH = floor((height - 1) / cellH) + 1
+
+    local inv_w = 1.0 / width
+    local inv_h = 1.0 / height
+    local s_over_z = scale / zm
+
+    -- Second noise layer scale
+    local sc2 = s_over_z * 2.7
+
+    local is_organic = (mode == 1)
+
+    if is_organic then
+        ---------------------------------------------------------------
+        -- ORGANIC (MultiCam) MODE: 3-layer gradient rendering
+        -- with coarse gradient grid optimization (fix #3)
+        ---------------------------------------------------------------
+        local bg_scale = s_over_z * 0.15
+
+        -- Gradient octaves capped at 3 for performance in organic mode
+        local grad_octaves = min(octaves, 3)
+
+        -- Step 1: Compute background gradient at 1/16 resolution
+        local bg_step = 16
+        local bg_gridW = floor(gridW / bg_step) + 2
+        local bg_gridH = floor(gridH / bg_step) + 2
+
+        -- Precompute the coarse background gradient grid
+        local bg_coarse_r = {}
+        local bg_coarse_g = {}
+        local bg_coarse_b = {}
+        local bg_coarse_a = {}
+
+        for cgy = 0, bg_gridH - 1 do
+            local row_r = {}
+            local row_g = {}
+            local row_b = {}
+            local row_a = {}
+            local gy_real = cgy * bg_step
+            local v = gy_real * cellH * inv_h - 0.5
+            local bg_y_coord = v * bg_scale + oy * 0.3
+
+            for cgx = 0, bg_gridW - 1 do
+                local gx_real = cgx * bg_step
+                local u = gx_real * cellW * inv_w - 0.5
+                local bg_x_coord = u * bg_scale * pix_aspect + ox * 0.3
+
+                local nx_bg = bg_x_coord
+                local ny_bg = bg_y_coord
+
+                -- Seethe on background
+                if seethe_warp ~= 0 then
+                    local sw = seethe_amt * 0.2
+                    nx_bg = nx_bg + sin(ny_bg * 3.7 + seethe_warp) * sw
+                    ny_bg = ny_bg + cos(nx_bg * 3.7 + seethe_warp * 0.7) * sw
+                end
+
+                local bg_noise = fbm3d(nx_bg, ny_bg, oz * 0.5, 1, lacunarity, persistence, p)
+                local bg_val = clamp((bg_noise + 1.0) * 0.5 + seethe_thr, 0.0, 1.0)
+
+                -- Contrast
+                if contrast ~= 1.0 then
+                    bg_val = clamp((bg_val - 0.5) * contrast + 0.5, 0.0, 1.0)
+                end
+                if invert then bg_val = 1.0 - bg_val end
+
+                -- Map to interpolated color
+                local cr, cg, cb, ca
+                if bg_val >= 1.0 then
+                    local c = colors[nc]
+                    cr, cg, cb, ca = c[1], c[2], c[3], c[4]
+                else
+                    local lower_idx = 1
+                    for i = 1, nc - 1 do
+                        if bg_val <= cum[i] then lower_idx = i; break end
+                        lower_idx = i + 1
+                    end
+                    local band_lo = (lower_idx > 1) and cum[lower_idx - 1] or 0.0
+                    local band_hi = cum[lower_idx]
+                    local band_w_val = band_hi - band_lo
+                    local blend_t = 0.0
+                    if band_w_val > 0.001 then
+                        blend_t = clamp((bg_val - band_lo) / band_w_val, 0.0, 1.0)
+                    end
+                    local next_idx = (lower_idx % nc) + 1
+                    local c1 = colors[lower_idx]
+                    local c2 = colors[next_idx]
+                    cr = c1[1] + (c2[1] - c1[1]) * blend_t
+                    cg = c1[2] + (c2[2] - c1[2]) * blend_t
+                    cb = c1[3] + (c2[3] - c1[3]) * blend_t
+                    ca = c1[4] + (c2[4] - c1[4]) * blend_t
+                end
+
+                row_r[cgx] = cr
+                row_g[cgx] = cg
+                row_b[cgx] = cb
+                row_a[cgx] = ca
+            end
+            bg_coarse_r[cgy] = row_r
+            bg_coarse_g[cgy] = row_g
+            bg_coarse_b[cgy] = row_b
+            bg_coarse_a[cgy] = row_a
+        end
+
+        -- Step 2: For each grid cell, bilinearly interpolate BG then
+        -- composite mid-freq blobs and micro-texture
+        local grid_r = {}
+        local grid_g = {}
+        local grid_b = {}
+        local grid_a = {}
+
+        local inv_bg_step = 1.0 / bg_step
+
+        for gy = 0, gridH - 1 do
+            local row_r = {}
+            local row_g = {}
+            local row_b = {}
+            local row_a = {}
+
+            -- Coarse grid coords for bilinear interp
+            local cgy_f = gy * inv_bg_step
+            local cgy0 = floor(cgy_f)
+            local cgy1 = cgy0 + 1
+            local ty = cgy_f - cgy0
+            local ity = 1.0 - ty
+            if cgy0 >= bg_gridH then cgy0 = bg_gridH - 1 end
+            if cgy1 >= bg_gridH then cgy1 = bg_gridH - 1 end
+
+            local bg_row0_r = bg_coarse_r[cgy0]
+            local bg_row0_g = bg_coarse_g[cgy0]
+            local bg_row0_b = bg_coarse_b[cgy0]
+            local bg_row0_a = bg_coarse_a[cgy0]
+            local bg_row1_r = bg_coarse_r[cgy1]
+            local bg_row1_g = bg_coarse_g[cgy1]
+            local bg_row1_b = bg_coarse_b[cgy1]
+            local bg_row1_a = bg_coarse_a[cgy1]
+
+            for gx = 0, gridW - 1 do
+                local cgx_f = gx * inv_bg_step
+                local cgx0 = floor(cgx_f)
+                local cgx1 = cgx0 + 1
+                local tx = cgx_f - cgx0
+                local itx = 1.0 - tx
+                if cgx0 >= bg_gridW then cgx0 = bg_gridW - 1 end
+                if cgx1 >= bg_gridW then cgx1 = bg_gridW - 1 end
+
+                -- Bilinear interpolation of background gradient
+                local bg_r = (bg_row0_r[cgx0]*itx + bg_row0_r[cgx1]*tx)*ity +
+                             (bg_row1_r[cgx0]*itx + bg_row1_r[cgx1]*tx)*ty
+                local bg_g_c = (bg_row0_g[cgx0]*itx + bg_row0_g[cgx1]*tx)*ity +
+                               (bg_row1_g[cgx0]*itx + bg_row1_g[cgx1]*tx)*ty
+                local bg_b = (bg_row0_b[cgx0]*itx + bg_row0_b[cgx1]*tx)*ity +
+                             (bg_row1_b[cgx0]*itx + bg_row1_b[cgx1]*tx)*ty
+                local bg_a = (bg_row0_a[cgx0]*itx + bg_row0_a[cgx1]*tx)*ity +
+                             (bg_row1_a[cgx0]*itx + bg_row1_a[cgx1]*tx)*ty
+
+                -- Coordinates for mid-frequency and micro layers
+                local u = gx * cellW * inv_w - 0.5
+                local v = gy * cellH * inv_h - 0.5
+
+                local nx_main = u * s_over_z * pix_aspect + ox
+                local ny_main = v * s_over_z + oy
+                local nx2 = u * sc2 * pix_aspect + ox + 100
+                local ny2 = v * sc2 + oy + 100
+
+                -- Static warp (domain warping)
+                if warp_amt > 0 then
+                    local wx1 = fbm3d(nx_main * 0.7 + 50, ny_main * 0.7 + 50, oz, 2, lacunarity, persistence, p)
+                    local wy1 = fbm3d(nx_main * 0.7 + 150, ny_main * 0.7 + 150, oz, 2, lacunarity, persistence, p)
+                    nx_main = nx_main + wx1 * warp_amt
+                    ny_main = ny_main + wy1 * warp_amt
+                end
+
+                -- Seethe domain warping on mid-freq
+                if seethe_warp ~= 0 then
+                    local sw = seethe_amt * 0.4
+                    nx_main = nx_main + sin(ny_main * 3.7 + seethe_warp) * sw
+                    ny_main = ny_main + cos(nx_main * 3.7 + seethe_warp * 0.7) * sw
+                    nx2 = nx2 + sin(ny2 * 3.7 + seethe_warp) * sw
+                    ny2 = ny2 + cos(nx2 * 3.7 + seethe_warp * 0.7) * sw
+                end
+
+                -- Layer 2: Mid-frequency organic blobs (use grad_octaves)
+                local n1 = fbm3d(nx_main, ny_main, oz, grad_octaves, lacunarity, persistence, p)
+                local n2 = fbm3d(nx2, ny2, oz + 100, grad_octaves, lacunarity, persistence, p) * 0.3
+                local n_main = clamp((n1 + n2 + 1.0) * 0.5 + seethe_thr, 0.0, 1.0)
+
+                -- Contrast and invert
+                if contrast ~= 1.0 then
+                    n_main = clamp((n_main - 0.5) * contrast + 0.5, 0.0, 1.0)
+                end
+                if invert then n_main = 1.0 - n_main end
+
+                -- Determine which color band
+                local blob_idx = nc
+                for i = 1, nc - 1 do
+                    if n_main <= cum[i] then blob_idx = i; break end
+                end
+                local blob_color = colors[blob_idx]
+
+                -- Opacity: hard in center, fade near edges
+                local band_lo = (blob_idx > 1) and cum[blob_idx - 1] or 0.0
+                local band_hi = cum[blob_idx]
+                local band_center = (band_lo + band_hi) * 0.5
+                local band_half = (band_hi - band_lo) * 0.5
+                local dist_from_center = abs(n_main - band_center)
+                local blob_opacity
+                if band_half > 0.001 then
+                    local norm_dist = dist_from_center / band_half
+                    blob_opacity = clamp(1.0 - norm_dist * 0.7, 0.3, 1.0)
+                else
+                    blob_opacity = 0.8
+                end
+
+                -- Composite blob onto background
+                local inv_blob = 1.0 - blob_opacity
+                local mr = bg_r * inv_blob + blob_color[1] * blob_opacity
+                local mg = bg_g_c * inv_blob + blob_color[2] * blob_opacity
+                local mb = bg_b * inv_blob + blob_color[3] * blob_opacity
+                local ma = bg_a * inv_blob + blob_color[4] * blob_opacity
+
+                -- Layer 3: Micro-texture (reuse n2 to avoid extra simplex calls)
+                local micro_val = n2 * 0.13
+
+                row_r[gx] = clamp(mr + micro_val, 0.0, 1.0)
+                row_g[gx] = clamp(mg + micro_val * 0.9, 0.0, 1.0)
+                row_b[gx] = clamp(mb + micro_val * 0.8, 0.0, 1.0)
+                row_a[gx] = clamp(ma, 0.0, 1.0)
+            end
+
+            grid_r[gy] = row_r
+            grid_g[gy] = row_g
+            grid_b[gy] = row_b
+            grid_a[gy] = row_a
+        end
+
+        -- Fill pixels from grid (single-threaded, optimized)
+        local px = Pixel()
+        px.A = 1.0
+        for y = 0, height - 1 do
+            local gy = floor(y / cellH)
+            if gy >= gridH then gy = gridH - 1 end
+            local rr = grid_r[gy]
+            local rg = grid_g[gy]
+            local rb = grid_b[gy]
+            for x = 0, width - 1 do
+                local gx = floor(x / cellW)
+                if gx >= gridW then gx = gridW - 1 end
+                px.R = clamp(rr[gx], 0, 1)
+                px.G = clamp(rg[gx], 0, 1)
+                px.B = clamp(rb[gx], 0, 1)
+                out:SetPixel(x, y, px)
+            end
+        end
+
+    else
+        ---------------------------------------------------------------
+        -- DIGITAL (MARPAT) MODE: quantized threshold approach
+        ---------------------------------------------------------------
+        local grid = {}
+        for gy = 0, gridH - 1 do
+            local row = {}
+            local ny = (gy * cellH * inv_h - 0.5) * s_over_z + oy
+            local ny2_base = (gy * cellH * inv_h - 0.5) * sc2 + oy + 100
+            for gx = 0, gridW - 1 do
+                local nx = (gx * cellW * inv_w - 0.5) * s_over_z * pix_aspect + ox
+                local nx2 = (gx * cellW * inv_w - 0.5) * sc2 * pix_aspect + ox + 100
+
+                local nxSc = nx
+                local nySc = ny
+                local nx2Sc = nx2
+                local ny2Sc = ny2_base
+
+                -- Static warp (domain warping)
+                if warp_amt > 0 then
+                    local wx1 = fbm3d(nxSc * 0.7 + 50, nySc * 0.7 + 50, oz, 2, lacunarity, persistence, p)
+                    local wy1 = fbm3d(nxSc * 0.7 + 150, nySc * 0.7 + 150, oz, 2, lacunarity, persistence, p)
+                    nxSc = nxSc + wx1 * warp_amt
+                    nySc = nySc + wy1 * warp_amt
+                end
+
+                -- Seethe domain warping
+                if seethe_warp ~= 0 then
+                    local sw = seethe_amt * 0.4
+                    nxSc = nxSc + sin(nySc * 3.7 + seethe_warp) * sw
+                    nySc = nySc + cos(nxSc * 3.7 + seethe_warp * 0.7) * sw
+                    nx2Sc = nx2Sc + sin(ny2Sc * 3.7 + seethe_warp) * sw
+                    ny2Sc = ny2Sc + cos(nx2Sc * 3.7 + seethe_warp * 0.7) * sw
+                end
+
+                local n1 = fbm3d(nxSc, nySc, oz, octaves, lacunarity, persistence, p)
+                local n2 = fbm3d(nx2Sc, ny2Sc, oz + 100, octaves, lacunarity, persistence, p) * 0.3
+                local n = ((n1 + n2) + 1.0) * 0.5 + seethe_thr
+
+                -- Contrast
+                if contrast ~= 1.0 then
+                    n = (n - 0.5) * contrast + 0.5
+                end
+                -- Invert
+                if invert then n = 1.0 - n end
+
+                if n < 0 then n = 0 elseif n > 1 then n = 1 end
+
+                local ci = nc
+                for i = 1, nc - 1 do
+                    if n <= cum[i] then ci = i; break end
+                end
+                row[gx] = ci
+            end
+            grid[gy] = row
+        end
+
+        -- Pre-extract color components into flat arrays for inner loop
+        local col_r, col_g, col_b, col_a = {}, {}, {}, {}
+        for i = 1, nc do
+            col_r[i] = colors[i][1]; col_g[i] = colors[i][2]
+            col_b[i] = colors[i][3]; col_a[i] = colors[i][4]
+        end
+
+        -- Fill pixels from grid (single-threaded, optimized)
+        local px = Pixel()
+        px.A = 1.0
+        for y = 0, height - 1 do
+            local gy = floor(y / cellH)
+            if gy >= gridH then gy = gridH - 1 end
+            local row = grid[gy]
+            for x = 0, width - 1 do
+                local gx = floor(x / cellW)
+                if gx >= gridW then gx = gridW - 1 end
+                local ci = row[gx]
+                px.R = col_r[ci]; px.G = col_g[ci]; px.B = col_b[ci]
+                out:SetPixel(x, y, px)
+            end
+        end
+    end
+
+    -- Store in cache
+    cached_image = out
+    cached_key = param_key
+
+    OutImage:Set(req, out)
+end

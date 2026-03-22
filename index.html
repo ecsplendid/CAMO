@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MARPAT Texture Generator</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a1a;
+  color: #e0e0e0;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+#sidebar {
+  width: 320px;
+  min-width: 320px;
+  background: #222;
+  padding: 16px;
+  overflow-y: auto;
+  border-right: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#sidebar h1 {
+  font-size: 18px;
+  color: #8fbc6a;
+  border-bottom: 1px solid #444;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+.section {
+  background: #2a2a2a;
+  border-radius: 8px;
+  padding: 12px;
+}
+.section h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #888;
+  margin-bottom: 10px;
+}
+.control {
+  margin-bottom: 10px;
+}
+.control:last-child { margin-bottom: 0; }
+.control label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.control label span.val {
+  color: #8fbc6a;
+  font-weight: bold;
+  font-family: monospace;
+}
+input[type="range"] {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  background: #444;
+  border-radius: 3px;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #8fbc6a;
+  cursor: pointer;
+}
+select {
+  width: 100%;
+  padding: 6px 8px;
+  background: #333;
+  color: #e0e0e0;
+  border: 1px solid #555;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.preset-btn {
+  padding: 6px 12px;
+  background: #3a3a3a;
+  border: 1px solid #555;
+  color: #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.preset-btn:hover { background: #4a4a4a; border-color: #8fbc6a; }
+.preset-btn.active { background: #4a5a3a; border-color: #8fbc6a; color: #8fbc6a; }
+.presets { display: flex; gap: 6px; flex-wrap: wrap; }
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.color-row input[type="color"] {
+  width: 32px;
+  height: 24px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  padding: 0;
+}
+.color-row span { font-size: 12px; flex: 1; }
+.color-row input[type="range"] { width: 80px; }
+#canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+}
+#canvas-wrap:active { cursor: grabbing; }
+canvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+#info {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  background: rgba(0,0,0,0.7);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  pointer-events: none;
+}
+#zoom-info {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(0,0,0,0.7);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: monospace;
+  pointer-events: none;
+}
+.btn {
+  padding: 8px 16px;
+  background: #3a5a2a;
+  border: 1px solid #5a8a3a;
+  color: #c0e0a0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.15s;
+  text-align: center;
+}
+.btn:hover { background: #4a6a3a; }
+.row { display: flex; gap: 8px; }
+.row > * { flex: 1; }
+input[type="checkbox"] { accent-color: #8fbc6a; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h1>Camouflage Generator</h1>
+
+  <div class="section">
+    <h2>Preset</h2>
+    <div class="presets" id="presets">
+      <button class="preset-btn active" data-preset="woodland">Woodland</button>
+      <button class="preset-btn" data-preset="desert">Desert</button>
+      <button class="preset-btn" data-preset="snow">Snow</button>
+      <button class="preset-btn" data-preset="urban">Urban</button>
+      <button class="preset-btn" data-preset="tiger">Tiger Stripe</button>
+      <button class="preset-btn" data-preset="flecktarn">Flecktarn</button>
+      <button class="preset-btn" data-preset="cadpat">CADPAT</button>
+      <button class="preset-btn" data-preset="night">Night</button>
+      <button class="preset-btn" data-preset="multicam">MultiCam</button>
+      <button class="preset-btn" data-preset="multicam_arid">MC Arid</button>
+      <button class="preset-btn" data-preset="multicam_tropic">MC Tropic</button>
+      <button class="preset-btn" data-preset="cyberpunk">Cyberpunk</button>
+      <button class="preset-btn" data-preset="autumn">Autumn</button>
+      <button class="preset-btn" data-preset="ocean">Ocean</button>
+      <button class="preset-btn" data-preset="lava">Lava</button>
+      <button class="preset-btn" data-preset="pastel">Pastel</button>
+      <button class="preset-btn" data-preset="filmgrain">Film Grain</button>
+      <button class="preset-btn" data-preset="noir">Noir</button>
+      <button class="preset-btn" data-preset="smoke">Smoke</button>
+      <button class="preset-btn" data-preset="parchment">Parchment</button>
+      <button class="preset-btn" data-preset="moss">Moss</button>
+      <button class="preset-btn" data-preset="concrete">Concrete</button>
+      <button class="preset-btn" data-preset="dusk">Dusk</button>
+      <button class="preset-btn" data-preset="mlst">MLST</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Pattern</h2>
+    <div class="control">
+      <label>Pixel Size <span class="val" id="v-pixelSize">4</span></label>
+      <input type="range" id="pixelSize" min="1" max="16" step="1" value="4">
+    </div>
+    <div class="control">
+      <label>Scale <span class="val" id="v-scale">0.020</span></label>
+      <input type="range" id="scale" min="0.003" max="0.08" step="0.001" value="0.020">
+    </div>
+    <div class="control">
+      <label>Detail (Octaves) <span class="val" id="v-octaves">4</span></label>
+      <input type="range" id="octaves" min="1" max="8" step="1" value="4">
+    </div>
+    <div class="control">
+      <label>Lacunarity <span class="val" id="v-lacunarity">2.0</span></label>
+      <input type="range" id="lacunarity" min="1.0" max="4.0" step="0.1" value="2.0">
+    </div>
+    <div class="control">
+      <label>Persistence <span class="val" id="v-persistence">0.5</span></label>
+      <input type="range" id="persistence" min="0.1" max="0.9" step="0.05" value="0.5">
+    </div>
+    <div class="control">
+      <label>Pixel Aspect <span class="val" id="v-aspect">1.5</span></label>
+      <input type="range" id="aspect" min="0.5" max="3.0" step="0.1" value="1.5">
+    </div>
+    <div class="control">
+      <label><input type="checkbox" id="screenPixels"> Screen Pixels</label>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Effects</h2>
+    <div class="control">
+      <label>Warp <span class="val" id="v-warp">0</span></label>
+      <input type="range" id="warp" min="0" max="5" step="0.1" value="0">
+    </div>
+    <div class="control">
+      <label>Contrast <span class="val" id="v-contrast">1.0</span></label>
+      <input type="range" id="contrast" min="0.5" max="2.0" step="0.05" value="1.0">
+    </div>
+    <div class="control">
+      <label><input type="checkbox" id="invert"> Invert</label>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Colors</h2>
+    <div id="color-controls"></div>
+    <div class="control" style="margin-top: 8px;">
+      <label>Threshold Spread <span class="val" id="v-spread">1.0</span></label>
+      <input type="range" id="spread" min="0.2" max="2.0" step="0.05" value="1.0">
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Animation</h2>
+    <div class="control">
+      <label><input type="checkbox" id="animate" checked> Animate Offset</label>
+    </div>
+    <div class="control">
+      <label>Speed <span class="val" id="v-speed">0.5</span></label>
+      <input type="range" id="speed" min="0.0" max="3.0" step="0.1" value="0.5">
+    </div>
+    <div class="control">
+      <label>Direction <span class="val" id="v-direction">45</span>&deg;</label>
+      <input type="range" id="direction" min="0" max="359" step="1" value="45">
+    </div>
+    <div class="control" style="margin-top: 8px; border-top: 1px solid #444; padding-top: 8px;">
+      <label><input type="checkbox" id="seethe"> Seethe</label>
+    </div>
+    <div class="control">
+      <label>Seethe Speed <span class="val" id="v-seetheSpeed">0.3</span></label>
+      <input type="range" id="seetheSpeed" min="0.05" max="2.0" step="0.05" value="0.3">
+    </div>
+    <div class="control">
+      <label>Seethe Amount <span class="val" id="v-seetheAmount">0.5</span></label>
+      <input type="range" id="seetheAmount" min="0.01" max="2.0" step="0.01" value="0.5">
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Noise Seed</h2>
+    <div class="control">
+      <label>Seed <span class="val" id="v-seed">42</span></label>
+      <input type="range" id="seed" min="0" max="999" step="1" value="42">
+    </div>
+    <div class="row">
+      <button class="btn" id="randomSeed">Random Seed</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Export</h2>
+    <div class="row">
+      <button class="btn" id="exportPng">Save PNG</button>
+      <button class="btn" id="exportTile">Save Tile</button>
+    </div>
+  </div>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
+  <div id="zoom-info">Zoom: 1.0x | Scroll to zoom, drag to pan</div>
+  <div id="info">-- fps</div>
+</div>
+
+<script>
+// === Simplex Noise (fast, seeded) ===
+class SimplexNoise {
+  constructor(seed) {
+    this.grad3 = [
+      [1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],
+      [1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+      [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]
+    ];
+    this.perm = new Uint8Array(512);
+    this.permMod12 = new Uint8Array(512);
+    const p = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) p[i] = i;
+    // Seed-based shuffle
+    let s = seed;
+    for (let i = 255; i > 0; i--) {
+      s = (s * 16807 + 0) % 2147483647;
+      const j = s % (i + 1);
+      [p[i], p[j]] = [p[j], p[i]];
+    }
+    for (let i = 0; i < 512; i++) {
+      this.perm[i] = p[i & 255];
+      this.permMod12[i] = this.perm[i] % 12;
+    }
+  }
+
+  noise2D(xin, yin) {
+    const F2 = 0.5 * (Math.sqrt(3.0) - 1.0);
+    const G2 = (3.0 - Math.sqrt(3.0)) / 6.0;
+    const s = (xin + yin) * F2;
+    const i = Math.floor(xin + s);
+    const j = Math.floor(yin + s);
+    const t = (i + j) * G2;
+    const X0 = i - t, Y0 = j - t;
+    const x0 = xin - X0, y0 = yin - Y0;
+    let i1, j1;
+    if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+    const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+    const x2 = x0 - 1.0 + 2.0 * G2, y2 = y0 - 1.0 + 2.0 * G2;
+    const ii = i & 255, jj = j & 255;
+    const gi0 = this.permMod12[ii + this.perm[jj]];
+    const gi1 = this.permMod12[ii + i1 + this.perm[jj + j1]];
+    const gi2 = this.permMod12[ii + 1 + this.perm[jj + 1]];
+    let n0, n1, n2;
+    let t0 = 0.5 - x0 * x0 - y0 * y0;
+    if (t0 < 0) n0 = 0.0;
+    else { t0 *= t0; n0 = t0 * t0 * (this.grad3[gi0][0] * x0 + this.grad3[gi0][1] * y0); }
+    let t1 = 0.5 - x1 * x1 - y1 * y1;
+    if (t1 < 0) n1 = 0.0;
+    else { t1 *= t1; n1 = t1 * t1 * (this.grad3[gi1][0] * x1 + this.grad3[gi1][1] * y1); }
+    let t2 = 0.5 - x2 * x2 - y2 * y2;
+    if (t2 < 0) n2 = 0.0;
+    else { t2 *= t2; n2 = t2 * t2 * (this.grad3[gi2][0] * x2 + this.grad3[gi2][1] * y2); }
+    return 70.0 * (n0 + n1 + n2);
+  }
+}
+
+// === Presets ===
+const PRESETS = {
+  woodland: {
+    colors: [
+      { hex: '#2d3a1a', weight: 0.30, name: 'Dark Green' },
+      { hex: '#5a6b3c', weight: 0.25, name: 'Medium Green' },
+      { hex: '#8b7355', weight: 0.20, name: 'Brown' },
+      { hex: '#c2b280', weight: 0.15, name: 'Tan' },
+      { hex: '#1a1a1a', weight: 0.10, name: 'Black' },
+    ],
+    scale: 0.020, octaves: 4, pixelSize: 4, aspect: 1.5, lacunarity: 2.0, persistence: 0.5
+  },
+  desert: {
+    colors: [
+      { hex: '#c2a66b', weight: 0.30, name: 'Light Tan' },
+      { hex: '#9b8454', weight: 0.25, name: 'Dark Tan' },
+      { hex: '#7a6a4f', weight: 0.25, name: 'Coyote Brown' },
+      { hex: '#2e2a22', weight: 0.20, name: 'Dark Brown' },
+    ],
+    scale: 0.018, octaves: 4, pixelSize: 4, aspect: 1.5, lacunarity: 2.0, persistence: 0.45
+  },
+  snow: {
+    colors: [
+      { hex: '#e8e8e8', weight: 0.35, name: 'White' },
+      { hex: '#b0b8b8', weight: 0.25, name: 'Light Gray' },
+      { hex: '#6a7a6a', weight: 0.20, name: 'Gray Green' },
+      { hex: '#3a3a3a', weight: 0.20, name: 'Dark' },
+    ],
+    scale: 0.022, octaves: 5, pixelSize: 3, aspect: 1.5, lacunarity: 2.0, persistence: 0.5
+  },
+  urban: {
+    colors: [
+      { hex: '#8a8a8a', weight: 0.30, name: 'Medium Gray' },
+      { hex: '#5a5a5a', weight: 0.25, name: 'Dark Gray' },
+      { hex: '#b0b0b0', weight: 0.25, name: 'Light Gray' },
+      { hex: '#2a2a2a', weight: 0.20, name: 'Near Black' },
+    ],
+    scale: 0.025, octaves: 4, pixelSize: 4, aspect: 1.4, lacunarity: 2.0, persistence: 0.5
+  },
+  tiger: {
+    colors: [
+      { hex: '#4a5a2a', weight: 0.35, name: 'Olive' },
+      { hex: '#2a3a1a', weight: 0.30, name: 'Dark Olive' },
+      { hex: '#1a1a0a', weight: 0.20, name: 'Near Black' },
+      { hex: '#8a7a4a', weight: 0.15, name: 'Tan' },
+    ],
+    scale: 0.012, octaves: 5, pixelSize: 3, aspect: 2.5, lacunarity: 2.5, persistence: 0.6
+  },
+  flecktarn: {
+    colors: [
+      { hex: '#4a5a3a', weight: 0.25, name: 'Green' },
+      { hex: '#2a3a2a', weight: 0.20, name: 'Dark Green' },
+      { hex: '#7a6a4a', weight: 0.20, name: 'Brown' },
+      { hex: '#1a1a1a', weight: 0.15, name: 'Black' },
+      { hex: '#8a9a5a', weight: 0.20, name: 'Light Green' },
+    ],
+    scale: 0.030, octaves: 5, pixelSize: 3, aspect: 1.2, lacunarity: 2.2, persistence: 0.55
+  },
+  cadpat: {
+    colors: [
+      { hex: '#3a4a2a', weight: 0.30, name: 'Green' },
+      { hex: '#5a6a3a', weight: 0.25, name: 'Light Green' },
+      { hex: '#6a5a3a', weight: 0.20, name: 'Brown' },
+      { hex: '#1a2a1a', weight: 0.15, name: 'Dark Green' },
+      { hex: '#2a2a1a', weight: 0.10, name: 'Dark' },
+    ],
+    scale: 0.025, octaves: 4, pixelSize: 3, aspect: 1.3, lacunarity: 2.0, persistence: 0.5
+  },
+  night: {
+    colors: [
+      { hex: '#0a0a14', weight: 0.35, name: 'Deep Navy' },
+      { hex: '#1a1a2a', weight: 0.25, name: 'Dark Blue' },
+      { hex: '#2a2a3a', weight: 0.20, name: 'Medium Blue' },
+      { hex: '#0a0a0a', weight: 0.20, name: 'Black' },
+    ],
+    scale: 0.018, octaves: 4, pixelSize: 4, aspect: 1.5, lacunarity: 2.0, persistence: 0.5
+  },
+  multicam: {
+    // MultiCam uses a gradient background that shifts regional hue
+    // plus organic blobs — creating the adaptive color-shift effect
+    colors: [
+      { hex: '#8C7F65', weight: 0.22, name: 'Clay Creek' },
+      { hex: '#A09378', weight: 0.20, name: 'Donkey Brown' },
+      { hex: '#B5A89B', weight: 0.18, name: 'Calm Beige' },
+      { hex: '#76785E', weight: 0.15, name: 'Limed Ash' },
+      { hex: '#4E3F34', weight: 0.15, name: 'English Leather' },
+      { hex: '#D7CFCE', weight: 0.10, name: 'Near White' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true // enables MultiCam gradient blending mode
+  },
+  multicam_arid: {
+    colors: [
+      { hex: '#C4B693', weight: 0.25, name: 'Sand' },
+      { hex: '#A89574', weight: 0.20, name: 'Dark Sand' },
+      { hex: '#D4C9B5', weight: 0.18, name: 'Light Beige' },
+      { hex: '#8A7A5A', weight: 0.17, name: 'Coyote' },
+      { hex: '#5A4A3A', weight: 0.12, name: 'Dark Brown' },
+      { hex: '#E0D8CA', weight: 0.08, name: 'Cream' },
+    ],
+    scale: 0.012, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  multicam_tropic: {
+    colors: [
+      { hex: '#3A4A2A', weight: 0.25, name: 'Dark Green' },
+      { hex: '#5A6A3A', weight: 0.22, name: 'Forest Green' },
+      { hex: '#7A8A4A', weight: 0.18, name: 'Light Green' },
+      { hex: '#4A3A2A', weight: 0.15, name: 'Brown' },
+      { hex: '#2A3A1A', weight: 0.12, name: 'Deep Green' },
+      { hex: '#8A7A5A', weight: 0.08, name: 'Tan' },
+    ],
+    scale: 0.012, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  cyberpunk: {
+    colors: [
+      { hex: '#0D0526', weight: 0.25, name: 'Deep Purple' },
+      { hex: '#260D4D', weight: 0.20, name: 'Dark Violet' },
+      { hex: '#00CCCC', weight: 0.15, name: 'Cyan' },
+      { hex: '#E61A80', weight: 0.15, name: 'Hot Pink' },
+      { hex: '#331A40', weight: 0.15, name: 'Plum' },
+      { hex: '#008099', weight: 0.10, name: 'Teal' },
+    ],
+    scale: 0.018, octaves: 5, pixelSize: 2, aspect: 1.2, lacunarity: 2.2, persistence: 0.55,
+    gradient: true
+  },
+  autumn: {
+    colors: [
+      { hex: '#993F0D', weight: 0.22, name: 'Rust' },
+      { hex: '#CC731A', weight: 0.20, name: 'Amber' },
+      { hex: '#73260D', weight: 0.18, name: 'Mahogany' },
+      { hex: '#F2A633', weight: 0.15, name: 'Gold' },
+      { hex: '#4D1F0D', weight: 0.15, name: 'Dark Bark' },
+      { hex: '#B38C40', weight: 0.10, name: 'Harvest' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  ocean: {
+    colors: [
+      { hex: '#052640', weight: 0.25, name: 'Deep Sea' },
+      { hex: '#0D4D66', weight: 0.22, name: 'Ocean' },
+      { hex: '#1A808C', weight: 0.18, name: 'Aqua' },
+      { hex: '#00334D', weight: 0.15, name: 'Abyss' },
+      { hex: '#269AA6', weight: 0.12, name: 'Surf' },
+      { hex: '#081A2E', weight: 0.08, name: 'Midnight' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  lava: {
+    colors: [
+      { hex: '#260500', weight: 0.25, name: 'Basalt' },
+      { hex: '#661400', weight: 0.22, name: 'Magma' },
+      { hex: '#E64D00', weight: 0.18, name: 'Flame' },
+      { hex: '#FF990D', weight: 0.12, name: 'Ember' },
+      { hex: '#400A00', weight: 0.13, name: 'Char' },
+      { hex: '#B32600', weight: 0.10, name: 'Molten' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  pastel: {
+    colors: [
+      { hex: '#D9B3CC', weight: 0.18, name: 'Rose' },
+      { hex: '#B3CCE6', weight: 0.18, name: 'Sky' },
+      { hex: '#E6D9B3', weight: 0.17, name: 'Butter' },
+      { hex: '#BFE6CC', weight: 0.17, name: 'Mint' },
+      { hex: '#CCBFE6', weight: 0.15, name: 'Lavender' },
+      { hex: '#E6CCBF', weight: 0.15, name: 'Peach' },
+    ],
+    scale: 0.015, octaves: 4, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.5,
+    gradient: true
+  },
+  filmgrain: {
+    colors: [
+      { hex: '#40382E', weight: 0.22, name: 'Sepia Dark' },
+      { hex: '#665947', weight: 0.20, name: 'Umber' },
+      { hex: '#8C7A61', weight: 0.18, name: 'Parchment' },
+      { hex: '#594D38', weight: 0.17, name: 'Tobacco' },
+      { hex: '#A69473', weight: 0.13, name: 'Buff' },
+      { hex: '#2E261F', weight: 0.10, name: 'Espresso' },
+    ],
+    scale: 0.020, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.2, persistence: 0.55,
+    gradient: true
+  },
+  noir: {
+    colors: [
+      { hex: '#141414', weight: 0.22, name: 'Jet' },
+      { hex: '#2E2E2E', weight: 0.20, name: 'Charcoal' },
+      { hex: '#4D4D4D', weight: 0.18, name: 'Slate' },
+      { hex: '#737373', weight: 0.17, name: 'Ash' },
+      { hex: '#1F1F1F', weight: 0.13, name: 'Onyx' },
+      { hex: '#8C8C8C', weight: 0.10, name: 'Silver' },
+    ],
+    scale: 0.018, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  smoke: {
+    colors: [
+      { hex: '#262B38', weight: 0.22, name: 'Gunmetal' },
+      { hex: '#404759', weight: 0.20, name: 'Storm' },
+      { hex: '#596173', weight: 0.18, name: 'Pewter' },
+      { hex: '#333847', weight: 0.17, name: 'Iron' },
+      { hex: '#737A8C', weight: 0.13, name: 'Mist' },
+      { hex: '#1A1F29', weight: 0.10, name: 'Ink' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  parchment: {
+    colors: [
+      { hex: '#BFAD8C', weight: 0.20, name: 'Vellum' },
+      { hex: '#A69473', weight: 0.18, name: 'Kraft' },
+      { hex: '#D1C29E', weight: 0.18, name: 'Ivory' },
+      { hex: '#8C7A61', weight: 0.17, name: 'Leather' },
+      { hex: '#B39E80', weight: 0.15, name: 'Wheat' },
+      { hex: '#D9CCAD', weight: 0.12, name: 'Cream' },
+    ],
+    scale: 0.018, octaves: 4, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.5,
+    gradient: true
+  },
+  moss: {
+    colors: [
+      { hex: '#334726', weight: 0.20, name: 'Moss' },
+      { hex: '#4D6138', weight: 0.18, name: 'Fern' },
+      { hex: '#40522E', weight: 0.18, name: 'Sage' },
+      { hex: '#26381F', weight: 0.17, name: 'Forest Floor' },
+      { hex: '#596B47', weight: 0.15, name: 'Lichen' },
+      { hex: '#2E4024', weight: 0.12, name: 'Ivy' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  concrete: {
+    colors: [
+      { hex: '#6B6661', weight: 0.20, name: 'Cement' },
+      { hex: '#85807A', weight: 0.18, name: 'Limestone' },
+      { hex: '#595552', weight: 0.18, name: 'Gravel' },
+      { hex: '#999490', weight: 0.17, name: 'Pumice' },
+      { hex: '#474543', weight: 0.15, name: 'Basalt' },
+      { hex: '#7A7570', weight: 0.12, name: 'Granite' },
+    ],
+    scale: 0.020, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  dusk: {
+    colors: [
+      { hex: '#593338', weight: 0.20, name: 'Wine' },
+      { hex: '#804D47', weight: 0.18, name: 'Clay' },
+      { hex: '#6B4040', weight: 0.18, name: 'Sienna' },
+      { hex: '#472E33', weight: 0.17, name: 'Plum' },
+      { hex: '#8C594D', weight: 0.15, name: 'Terracotta' },
+      { hex: '#38262E', weight: 0.12, name: 'Bordeaux' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  },
+  mlst: {
+    // Machine Learning Street Talk brand palette
+    // Navy/yellow with tactile warmth, dark grounding
+    colors: [
+      { hex: '#232E3F', weight: 0.28, name: 'Network Navy' },
+      { hex: '#1A2230', weight: 0.20, name: 'Deep Navy' },
+      { hex: '#FFB52B', weight: 0.12, name: 'Pineapple Yellow' },
+      { hex: '#F4F4F4', weight: 0.10, name: 'Cloud White' },
+      { hex: '#3A4A5F', weight: 0.18, name: 'Slate Blue' },
+      { hex: '#CC9122', weight: 0.12, name: 'Dark Gold' },
+    ],
+    scale: 0.015, octaves: 5, pixelSize: 1, aspect: 1.0, lacunarity: 2.0, persistence: 0.55,
+    gradient: true
+  }
+};
+
+// === State ===
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let noise;
+let zoom = 1.0;
+let panX = 0, panY = 0;
+let dragging = false, lastMX = 0, lastMY = 0;
+let animTime = 0;
+let lastFrameTime = 0;
+let frameCount = 0, fpsTime = 0, fps = 0;
+
+const params = {
+  pixelSize: 4,
+  scale: 0.020,
+  octaves: 4,
+  lacunarity: 2.0,
+  persistence: 0.5,
+  aspect: 1.5,
+  spread: 1.0,
+  animate: true,
+  speed: 0.5,
+  direction: 45,
+  seed: 42,
+  screenPixels: false, // pixel size in screen pixels rather than world pixels
+  gradient: false, // MultiCam gradient blending mode
+  seethe: false,
+  seetheSpeed: 0.3,
+  seetheAmount: 0.5,
+  warp: 0,
+  contrast: 1.0,
+  invert: false,
+  colors: JSON.parse(JSON.stringify(PRESETS.woodland.colors))
+};
+
+// === Noise init ===
+function initNoise() {
+  noise = new SimplexNoise(params.seed);
+}
+initNoise();
+
+// === Resize ===
+function resize() {
+  const wrap = document.getElementById('canvas-wrap');
+  const w = wrap.clientWidth;
+  const h = wrap.clientHeight;
+  if (w > 0 && h > 0 && (canvas.width !== w || canvas.height !== h)) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+window.addEventListener('resize', resize);
+window.addEventListener('load', resize);
+
+// === Color controls ===
+function buildColorControls() {
+  const container = document.getElementById('color-controls');
+  container.innerHTML = '';
+  params.colors.forEach((c, i) => {
+    const row = document.createElement('div');
+    row.className = 'color-row';
+    row.innerHTML = `
+      <input type="color" value="${c.hex}" data-idx="${i}">
+      <span>${c.name}</span>
+      <input type="range" min="0.05" max="0.60" step="0.05" value="${c.weight}" data-idx="${i}" title="Weight">
+    `;
+    container.appendChild(row);
+  });
+  container.querySelectorAll('input[type="color"]').forEach(el => {
+    el.addEventListener('input', e => {
+      params.colors[+e.target.dataset.idx].hex = e.target.value;
+    });
+  });
+  container.querySelectorAll('input[type="range"]').forEach(el => {
+    el.addEventListener('input', e => {
+      params.colors[+e.target.dataset.idx].weight = +e.target.value;
+    });
+  });
+}
+buildColorControls();
+
+// === Slider binding ===
+const sliders = ['pixelSize','scale','octaves','lacunarity','persistence','aspect','spread','speed','direction','seed','seetheSpeed','seetheAmount','warp','contrast'];
+sliders.forEach(id => {
+  const el = document.getElementById(id);
+  const val = document.getElementById('v-' + id);
+  el.addEventListener('input', () => {
+    const v = +el.value;
+    params[id] = v;
+    val.textContent = Number.isInteger(v) ? v : v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '.0');
+    if (id === 'seed') initNoise();
+  });
+});
+
+document.getElementById('animate').addEventListener('change', e => {
+  params.animate = e.target.checked;
+});
+
+document.getElementById('screenPixels').addEventListener('change', e => {
+  params.screenPixels = e.target.checked;
+});
+
+document.getElementById('seethe').addEventListener('change', e => {
+  params.seethe = e.target.checked;
+});
+
+document.getElementById('invert').addEventListener('change', e => {
+  params.invert = e.target.checked;
+});
+
+// === Presets ===
+document.getElementById('presets').addEventListener('click', e => {
+  if (!e.target.dataset.preset) return;
+  const p = PRESETS[e.target.dataset.preset];
+  if (!p) return;
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  e.target.classList.add('active');
+  params.colors = JSON.parse(JSON.stringify(p.colors));
+  params.scale = p.scale;
+  params.octaves = p.octaves;
+  params.pixelSize = p.pixelSize;
+  params.aspect = p.aspect;
+  params.lacunarity = p.lacunarity;
+  params.persistence = p.persistence;
+  params.gradient = !!p.gradient;
+  // Update sliders
+  ['scale','octaves','pixelSize','aspect','lacunarity','persistence'].forEach(k => {
+    const el = document.getElementById(k);
+    el.value = params[k];
+    const val = document.getElementById('v-' + k);
+    const v = params[k];
+    val.textContent = Number.isInteger(v) ? v : v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '.0');
+  });
+  buildColorControls();
+});
+
+// === Random seed ===
+document.getElementById('randomSeed').addEventListener('click', () => {
+  params.seed = Math.floor(Math.random() * 1000);
+  document.getElementById('seed').value = params.seed;
+  document.getElementById('v-seed').textContent = params.seed;
+  initNoise();
+});
+
+// === Zoom & Pan ===
+const canvasWrap = document.getElementById('canvas-wrap');
+canvasWrap.addEventListener('wheel', e => {
+  e.preventDefault();
+  const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left;
+  const my = e.clientY - rect.top;
+  // Zoom toward cursor
+  panX = mx - (mx - panX) * zoomFactor;
+  panY = my - (my - panY) * zoomFactor;
+  zoom *= zoomFactor;
+  zoom = Math.max(0.1, Math.min(zoom, 50));
+  document.getElementById('zoom-info').textContent = `Zoom: ${zoom.toFixed(1)}x | Scroll to zoom, drag to pan`;
+}, { passive: false });
+
+canvasWrap.addEventListener('mousedown', e => {
+  dragging = true; lastMX = e.clientX; lastMY = e.clientY;
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  panX += e.clientX - lastMX;
+  panY += e.clientY - lastMY;
+  lastMX = e.clientX;
+  lastMY = e.clientY;
+});
+window.addEventListener('mouseup', () => { dragging = false; });
+
+// === FBM noise ===
+function fbm(x, y, maxOctaves) {
+  const oct = maxOctaves || params.octaves;
+  let value = 0, amp = 1, freq = 1, max = 0;
+  for (let i = 0; i < oct; i++) {
+    value += noise.noise2D(x * freq, y * freq) * amp;
+    max += amp;
+    amp *= params.persistence;
+    freq *= params.lacunarity;
+  }
+  return value / max;
+}
+
+// === Parse hex ===
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return [r, g, b];
+}
+
+// === Render state ===
+let imgData = null;
+let imgW = 0, imgH = 0;
+let pixels32 = null; // Uint32Array view for fast pixel writes
+
+// === Render ===
+function render(time) {
+  requestAnimationFrame(render);
+  resize();
+  if (canvas.width === 0 || canvas.height === 0) return;
+  if (lastFrameTime === 0) lastFrameTime = time; // prevent huge first dt
+  const dt = Math.min((time - lastFrameTime) / 1000, 0.1); // clamp to 100ms
+  lastFrameTime = time;
+
+  // FPS
+  frameCount++;
+  fpsTime += dt;
+  if (fpsTime >= 0.5) {
+    fps = Math.round(frameCount / fpsTime);
+    frameCount = 0;
+    fpsTime = 0;
+  }
+
+  // Animation offset in world space
+  if (params.animate) {
+    animTime += dt * params.speed * 20;
+  }
+  const rad = params.direction * Math.PI / 180;
+  const animOX = params.animate ? animTime * Math.cos(rad) : 0;
+  const animOY = params.animate ? animTime * Math.sin(rad) : 0;
+
+  // Seethe: cyclical noise evolution that morphs the pattern in place.
+  // NO translation, NO zoom — only domain warping + threshold shifting.
+  let seethePhase = 0;
+  if (params.seethe) {
+    seethePhase = time * 0.001 * params.seetheSpeed;
+  }
+  const seetheActive = params.seethe;
+  const seetheAmt = params.seetheAmount;
+  // Threshold shift — colors ebb and flow cyclically
+  const seetheThr = seetheActive ? Math.sin(seethePhase * Math.PI * 2 * 0.9) * 0.15 * seetheAmt : 0;
+  // Domain warp phase — position-dependent distortion, no net translation
+  const seetheWarpPhase = seethePhase * Math.PI * 2;
+
+  const w = canvas.width;
+  const h = canvas.height;
+  const ps = params.pixelSize;
+  const psW = Math.max(1, Math.round(ps * params.aspect));
+  const psH = ps;
+  const sc = params.scale;
+  const sc2 = sc * 2.7;
+  const spread = params.spread;
+
+  // Screen Pixels mode: pixel size is constant on screen regardless of zoom.
+  // World Pixels mode (default): pixel size scales with zoom (world-space).
+  const screenPixelMode = params.screenPixels;
+
+  let effPsW, effPsH, cellPxW, cellPxH, coarsenX, coarsenY;
+
+  if (screenPixelMode) {
+    // Each grid cell is always pixelSize screen pixels (constant on screen)
+    effPsW = psW;               // screen-space cell width
+    effPsH = psH;               // screen-space cell height
+    cellPxW = Math.max(1, Math.round(effPsW));
+    cellPxH = Math.max(1, Math.round(effPsH));
+    coarsenX = 1;
+    coarsenY = 1;
+  } else {
+    // Zoom-adaptive coarsening: ensure each cell is at least 2 screen pixels
+    // This caps grid cell count at roughly (w/2) * (h/2) even at extreme zoom-out
+    const minCellPx = 2;
+    const cellScreenW = psW * zoom;
+    const cellScreenH = psH * zoom;
+    coarsenX = cellScreenW < minCellPx ? Math.ceil(minCellPx / cellScreenW) : 1;
+    coarsenY = cellScreenH < minCellPx ? Math.ceil(minCellPx / cellScreenH) : 1;
+    effPsW = psW * coarsenX;
+    effPsH = psH * coarsenY;
+
+    // Integer cell size on screen — key to wobble-free rendering
+    // By rounding to integer pixels, floor() in the pixel loop uses integer
+    // arithmetic, so all columns/rows shift uniformly (no float rounding wobble)
+    cellPxW = Math.max(1, Math.round(effPsW * zoom));
+    cellPxH = Math.max(1, Math.round(effPsH * zoom));
+  }
+
+  // Integer screen position of the world origin
+  const originX = Math.round(animOX * zoom + panX);
+  const originY = Math.round(animOY * zoom + panY);
+
+  // Reuse imgData if canvas size unchanged
+  if (imgW !== w || imgH !== h) {
+    imgData = ctx.createImageData(w, h);
+    pixels32 = new Uint32Array(imgData.data.buffer);
+    imgW = w;
+    imgH = h;
+  }
+
+  // Build thresholds from weights
+  const colors = params.colors;
+  const totalWeight = colors.reduce((s, c) => s + c.weight, 0);
+  const thresholds = [];
+  let cumulative = 0;
+  for (let i = 0; i < colors.length - 1; i++) {
+    cumulative += colors[i].weight / totalWeight;
+    thresholds.push(-1 + cumulative * 2 * spread);
+  }
+
+  // Precompute packed ABGR colors for Uint32 writes (little-endian)
+  const rgbColors = colors.map(c => hexToRgb(c.hex));
+  const packed = new Uint32Array(rgbColors.length);
+  for (let i = 0; i < rgbColors.length; i++) {
+    const [r, g, b] = rgbColors[i];
+    packed[i] = 0xFF000000 | (b << 16) | (g << 8) | r;
+  }
+
+  // Grid bounds from integer screen mapping (wobble-free)
+  const gxStart = Math.floor(-originX / cellPxW) - 1;
+  const gxEnd = Math.floor((w - 1 - originX) / cellPxW) + 1;
+  const gyStart = Math.floor(-originY / cellPxH) - 1;
+  const gyEnd = Math.floor((h - 1 - originY) / cellPxH) + 1;
+
+  const gridW = gxEnd - gxStart + 1;
+  const gridH = gyEnd - gyStart + 1;
+
+  // Cap grid size for safety (prevents freeze at extreme zoom-out)
+  if (gridW * gridH > 2000000) {
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#333';
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('Zoom in — too many cells to render', 20, h / 2);
+    return;
+  }
+
+  // Reduce octaves when zoomed out — detail is invisible anyway
+  // In screen pixel mode, resolution is constant so always use full octaves
+  const zoomOctaves = screenPixelMode ? params.octaves
+    : Math.max(1, Math.min(params.octaves,
+        Math.round(params.octaves + Math.log2(Math.min(1, zoom)))));
+
+  // Precompute packed color for each visible grid cell
+  const isGradient = params.gradient;
+  const gradSc = sc * 0.15;
+  const gridPacked = new Uint32Array(gridW * gridH);
+
+  // World-space step per grid cell
+  const worldStepX = screenPixelMode ? effPsW / zoom : effPsW;
+  const worldStepY = screenPixelMode ? effPsH / zoom : effPsH;
+
+  // Flatten RGB arrays for fast inner-loop access (avoid destructuring)
+  const nColors = rgbColors.length;
+  const flatR = new Float64Array(nColors);
+  const flatG = new Float64Array(nColors);
+  const flatB = new Float64Array(nColors);
+  for (let i = 0; i < nColors; i++) {
+    flatR[i] = rgbColors[i][0];
+    flatG[i] = rgbColors[i][1];
+    flatB[i] = rgbColors[i][2];
+  }
+
+  // For gradient mode: precompute background gradient on a coarse grid
+  // (1/8 resolution) then bilinearly interpolate. Saves ~87% of gradient fbm calls.
+  let gradGrid, gradGW, gradGH, gradStepX, gradStepY;
+  const GRAD_STEP = 8;
+  if (isGradient) {
+    gradGW = Math.ceil(gridW / GRAD_STEP) + 2;
+    gradGH = Math.ceil(gridH / GRAD_STEP) + 2;
+    gradGrid = new Float32Array(gradGW * gradGH);
+    for (let cgy = 0; cgy < gradGH; cgy++) {
+      for (let cgx = 0; cgx < gradGW; cgx++) {
+        const wx = (gxStart + cgx * GRAD_STEP) * worldStepX;
+        const wy = (gyStart + cgy * GRAD_STEP) * worldStepY;
+        gradGrid[cgy * gradGW + cgx] = fbm(wx * gradSc + 200, wy * gradSc + 200, 2) * 0.5 + 0.5;
+      }
+    }
+  }
+
+  // Fewer octaves for the detail noise in gradient mode (it's micro-texture)
+  const detailOctaves = isGradient ? Math.min(zoomOctaves, 3) : zoomOctaves;
+
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      const wx = (gxStart + gx) * worldStepX;
+      const wy = (gyStart + gy) * worldStepY;
+
+      // Seethe domain warping (position-dependent, no translation)
+      let nxSc = wx * sc;
+      let nySc = wy * sc;
+      if (seetheActive) {
+        const warpAmt = seetheAmt * 0.4;
+        nxSc += Math.sin(wy * sc * 3.7 + seetheWarpPhase) * warpAmt;
+        nySc += Math.cos(wx * sc * 3.7 + seetheWarpPhase * 0.7) * warpAmt;
+      }
+      if (params.warp > 0) {
+        const warpN1 = fbm(nxSc * 0.7 + 50, nySc * 0.7 + 50, 2);
+        const warpN2 = fbm(nxSc * 0.7 + 150, nySc * 0.7 + 150, 2);
+        nxSc += warpN1 * params.warp;
+        nySc += warpN2 * params.warp;
+      }
+      const n1 = fbm(nxSc, nySc, zoomOctaves);
+      const n2 = fbm(wx * sc2 + 100, wy * sc2 + 100, detailOctaves) * 0.3;
+      let n = n1 + n2 + seetheThr;
+      n = n * params.contrast;
+      if (params.invert) n = -n;
+
+      let ci = nColors - 1;
+      for (let t = 0; t < thresholds.length; t++) {
+        if (n < thresholds[t]) { ci = t; break; }
+      }
+
+      if (isGradient) {
+        // Layer 1: Background gradient via bilinear interpolation of coarse grid
+        const cgx = gx / GRAD_STEP;
+        const cgy = gy / GRAD_STEP;
+        const cgxi = Math.min(cgx | 0, gradGW - 2);
+        const cgyi = Math.min(cgy | 0, gradGH - 2);
+        const fx = cgx - cgxi;
+        const fy = cgy - cgyi;
+        const g00 = gradGrid[cgyi * gradGW + cgxi];
+        const g10 = gradGrid[cgyi * gradGW + cgxi + 1];
+        const g01 = gradGrid[(cgyi + 1) * gradGW + cgxi];
+        const g11 = gradGrid[(cgyi + 1) * gradGW + cgxi + 1];
+        const bg = g00 * (1-fx) * (1-fy) + g10 * fx * (1-fy) + g01 * (1-fx) * fy + g11 * fx * fy;
+
+        // Interpolate between adjacent palette colors
+        const bgIdx = bg * (nColors - 1);
+        const bgLo = Math.min(bgIdx | 0, nColors - 2);
+        const bgFrac = bgIdx - bgLo;
+        let rOut = flatR[bgLo] + (flatR[bgLo+1] - flatR[bgLo]) * bgFrac;
+        let gOut = flatG[bgLo] + (flatG[bgLo+1] - flatG[bgLo]) * bgFrac;
+        let bOut = flatB[bgLo] + (flatB[bgLo+1] - flatB[bgLo]) * bgFrac;
+
+        // Layer 2: Mid-frequency organic blobs with hard+fading edges
+        let blobAlpha;
+        if (ci === 0) {
+          const edge = thresholds[0];
+          blobAlpha = edge !== 0 ? Math.min(1, (edge - n) / (Math.abs(edge) * 0.3 + 0.05)) : 1;
+        } else if (ci >= thresholds.length) {
+          const edge = thresholds[thresholds.length - 1];
+          blobAlpha = Math.min(1, (n - edge) / (Math.abs(edge) * 0.3 + 0.05));
+        } else {
+          const lo = thresholds[ci - 1];
+          const hi = thresholds[ci];
+          const pos = (n - lo) / ((hi - lo) || 0.01);
+          blobAlpha = Math.min(1, Math.min(pos, 1 - pos) / 0.2);
+        }
+        if (blobAlpha < 0) blobAlpha = 0;
+        else if (blobAlpha > 1) blobAlpha = 1;
+
+        const bAlpha = blobAlpha * 0.65;
+        const bAlphaInv = 1 - bAlpha;
+        rOut = rOut * bAlphaInv + flatR[ci] * bAlpha;
+        gOut = gOut * bAlphaInv + flatG[ci] * bAlpha;
+        bOut = bOut * bAlphaInv + flatB[ci] * bAlpha;
+
+        // Layer 3: Micro-texture via n2 (already computed, no extra cost)
+        const microShift = n2 * 3.3 * 12;
+        rOut += microShift;
+        gOut += microShift * 0.8;
+        bOut += microShift * 0.6;
+        if (rOut < 0) rOut = 0; else if (rOut > 255) rOut = 255;
+        if (gOut < 0) gOut = 0; else if (gOut > 255) gOut = 255;
+        if (bOut < 0) bOut = 0; else if (bOut > 255) bOut = 255;
+
+        gridPacked[gy * gridW + gx] = 0xFF000000
+          | ((bOut + 0.5 | 0) << 16)
+          | ((gOut + 0.5 | 0) << 8)
+          |  (rOut + 0.5 | 0);
+      } else {
+        gridPacked[gy * gridW + gx] = packed[ci];
+      }
+    }
+  }
+
+  // Precompute grid column for each screen X — integer math, no wobble
+  const colIdx = new Int32Array(w);
+  for (let sx = 0; sx < w; sx++) {
+    colIdx[sx] = Math.floor((sx - originX) / cellPxW) - gxStart;
+  }
+
+  // Fill screen pixels via grid lookup using Uint32 writes
+  const p32 = pixels32;
+  for (let sy = 0; sy < h; sy++) {
+    const rowGy = Math.floor((sy - originY) / cellPxH) - gyStart;
+    const gridRowOff = rowGy * gridW;
+    const pixRowOff = sy * w;
+
+    for (let sx = 0; sx < w; sx++) {
+      p32[pixRowOff + sx] = gridPacked[gridRowOff + colIdx[sx]];
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  document.getElementById('info').textContent =
+    `${fps} fps | ${w}x${h} | ${gridW}x${gridH} cells` +
+    (coarsenX > 1 || coarsenY > 1 ? ` | coarsen ${coarsenX}x${coarsenY}` : '') +
+    (screenPixelMode ? ' | screen-px' : '');
+}
+
+requestAnimationFrame(render);
+
+// === Export ===
+document.getElementById('exportPng').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.download = `marpat_${params.seed}.png`;
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+});
+
+document.getElementById('exportTile').addEventListener('click', () => {
+  // Render a tileable 512x512 texture
+  const tileSize = 512;
+  const tc = document.createElement('canvas');
+  tc.width = tileSize;
+  tc.height = tileSize;
+  const tctx = tc.getContext('2d');
+  const tid = tctx.createImageData(tileSize, tileSize);
+  const td = tid.data;
+  const ps = params.pixelSize;
+  const psW = Math.max(1, Math.round(ps * params.aspect));
+  const psH = ps;
+  const sc = params.scale;
+  const sc2 = sc * 2.7;
+  const spread = params.spread;
+  const colors = params.colors;
+  const totalWeight = colors.reduce((s, c) => s + c.weight, 0);
+  const thresholds = [];
+  let cumul = 0;
+  for (let i = 0; i < colors.length - 1; i++) {
+    cumul += colors[i].weight / totalWeight;
+    thresholds.push(-1 + cumul * 2 * spread);
+  }
+  const rgbColors = colors.map(c => hexToRgb(c.hex));
+
+  for (let py = 0; py < tileSize; py += psH) {
+    for (let px = 0; px < tileSize; px += psW) {
+      const qx = Math.floor(px / psW) * psW;
+      const qy = Math.floor(py / psH) * psH;
+      const n1 = fbm(qx * sc, qy * sc);
+      const n2 = fbm(qx * sc2 + 100, qy * sc2 + 100) * 0.3;
+      const n = n1 + n2;
+      let ci = colors.length - 1;
+      for (let t = 0; t < thresholds.length; t++) {
+        if (n < thresholds[t]) { ci = t; break; }
+      }
+      const [r, g, b] = rgbColors[ci];
+      const maxY = Math.min(py + psH, tileSize);
+      const maxX = Math.min(px + psW, tileSize);
+      for (let y = py; y < maxY; y++) {
+        for (let x = px; x < maxX; x++) {
+          const off = (y * tileSize + x) * 4;
+          td[off] = r; td[off+1] = g; td[off+2] = b; td[off+3] = 255;
+        }
+      }
+    }
+  }
+  tctx.putImageData(tid, 0, 0);
+  const link = document.createElement('a');
+  link.download = `marpat_tile_${params.seed}.png`;
+  link.href = tc.toDataURL('image/png');
+  link.click();
+});
+</script>
+</body>
+</html>
