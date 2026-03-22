@@ -1,5 +1,7 @@
 # CAMO - Procedural Camouflage & Texture Generator
 
+**[Try the Live Demo](https://ecsplendid.github.io/CAMO/)**
+
 Real-time procedural camouflage and texture generator with two implementations:
 
 1. **Web App** (`index.html`) - Browser-based real-time generator with interactive controls
