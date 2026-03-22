@@ -9,7 +9,7 @@ Both generate MARPAT-style digital camouflage, MultiCam-style organic patterns, 
 
 ![Screenshot](SCREENSHOT.png)
 
-https://github.com/user-attachments/assets/demo.mp4
+https://github.com/ecsplendid/CAMO/raw/main/demo.mp4
 
 *Demo: Web app (first half) followed by DaVinci Resolve Fusion integration (second half)*
 
